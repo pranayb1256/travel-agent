@@ -16,6 +16,7 @@ OPENAI_API_KEY =os.getenv("OPENAI_API_KEY")
 SERP_API_KEY = os.getenv("SERP_API_KEY")
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY")
+AVIATION_API_KEY = os.getenv("AVIATION_API_KEY")
 
 if not OPENAI_API_KEY or not SERP_API_KEY or not WEATHER_API_KEY or not EXCHANGE_API_KEY:
     st.error("Missing API Keys! Please add them.")
@@ -39,11 +40,25 @@ get_accommodation = st.checkbox("🏨 Include Accommodation Suggestions")
 get_shopping = st.checkbox("🛍️ Include Shopping & Souvenirs Guide")
 get_packing_list = st.checkbox("🎒 Include Smart Packing List")
 get_local_phrases = st.checkbox("🔊 Include Basic Local Phrases")
+get_flight_info = st.checkbox("🛩️ Include Real-Time Flight Tracker")
+
+import requests
 
 def get_currency_exchange_rate(currency):
+   
     url = f"https://v6.exchangerate-api.com/v6/{EXCHANGE_API_KEY}/latest/USD"
-    response = requests.get(url).json()
-    return response["conversion_rates"].get(currency, "Unavailable")
+    
+    try:
+        response = requests.get(url)
+        data = response.json()
+        if data.get("result") != "success":
+            return f"API Error: {data.get('error-type', 'Unknown error')}"
+        if "conversion_rates" not in data:
+            return " Error: No conversion rates found in API response."
+        return data["conversion_rates"].get(currency, "Currency Not Found.")
+    except requests.exceptions.RequestException as e:
+        return f" API Request Failed: {e}"
+
 
 def get_transport_info(destination):
     prompt = f"Provide public transport and taxi options in {destination}."
@@ -80,12 +95,62 @@ def get_packing_list(destination, num_days):
         messages=[{"role": "user", "content": prompt}]
     ).choices[0].message.content
 
+
+def get_flight_info(flight_iata):
+    if not AVIATION_API_KEY:
+        return " Missing API Key for AviationStack."
+
+    url = f"http://api.aviationstack.com/v1/flights?access_key={AVIATION_API_KEY}&flight_iata={flight_iata}"
+    response = requests.get(url).json()
+    
+    if "data" in response and len(response["data"]) > 0:
+        flight = response["data"][0]
+
+        airline = flight.get("airline", {}).get("name", "Unknown Airline")
+        status = flight.get("flight_status", "Unknown Status")
+
+        departure_airport = flight.get("departure", {}).get("airport", "Unknown Airport")
+        departure_time = flight.get("departure", {}).get("estimated", "N/A")
+
+        arrival_airport = flight.get("arrival", {}).get("airport", "Unknown Airport")
+        arrival_time = flight.get("arrival", {}).get("estimated", "N/A")
+
+        return f"""
+        ✈️ **Flight Status**: {status}
+        🏢 **Airline**: {airline}
+        🛫 **Departure**: {departure_airport} at {departure_time}
+        🛬 **Arrival**: {arrival_airport} at {arrival_time}
+        """
+    
+    return " Flight information not available. Please check the flight code."
+
 def get_local_phrases(destination):
     prompt = f"Provide essential travel phrases in the local language of {destination}."
     return client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}]
     ).choices[0].message.content
+    
+def get_weather_info(destination):
+    weather_url = f"http://api.openweathermap.org/data/2.5/weather?q={destination}&appid={WEATHER_API_KEY}&units=metric"
+    
+    try:
+        response = requests.get(weather_url)
+        data = response.json()
+        if response.status_code != 200 or "main" not in data:
+            return f" Weather data not available: {data.get('message', 'Unknown error')}"
+        
+        weather_desc = data["weather"][0]["description"].capitalize()
+        temp = data["main"]["temp"]
+        humidity = data["main"]["humidity"]
+        wind_speed = data["wind"]["speed"]
+
+        return f"🌡️ **Temperature:** {temp}°C\n💨 **Wind Speed:** {wind_speed} m/s\n💧 **Humidity:** {humidity}%\n☁️ **Condition:** {weather_desc}"
+
+    except requests.exceptions.RequestException as e:
+        return f" API Request Failed: {e}"
+
+
 
 if st.button("🛫 Generate Travel Plan"):
     if not destination.strip():
@@ -99,8 +164,8 @@ if st.button("🛫 Generate Travel Plan"):
             st.markdown(get_accommodation(destination, budget))
         
         if get_weather:
-            st.subheader("🌦️ Weather Forecast")
-            st.markdown("Weather Info Here")
+          st.subheader("🌦️ Real-Time Weather Forecast")
+          st.markdown(get_weather_info(destination))
         
         if get_cuisine:
             st.subheader("🍽️ Local Cuisine")
@@ -130,7 +195,12 @@ if st.button("🛫 Generate Travel Plan"):
             st.subheader("🔊 Basic Local Language Phrases")
             st.markdown(get_local_phrases(destination))
         
+        if get_flight_info:
+            st.subheader("🛩️ Real-Time Flight Tracker")
+            flight_code = st.text_input("Enter Flight IATA Code (e.g., AI101)")
+            st.markdown(get_flight_info(flight_code))
         st.subheader("🗺️ Interactive Map")
+        
         map_center = Nominatim(user_agent="geoapi").geocode(destination)
         if map_center:
             m = folium.Map(location=[map_center.latitude, map_center.longitude], zoom_start=12)
@@ -138,6 +208,3 @@ if st.button("🛫 Generate Travel Plan"):
             folium_static(m)
         else:
             st.warning("Could not generate map for this location.")
-
-
-
